@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Radar — pre-token protocols ranked by implied value</title>
+<meta name="description" content="A static, offline board of pre-token protocols ranked by model implied value, with the live-token set shown separately at market value.">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<a class="skip" href="#board-wrap">Skip to the board</a>
+<div class="wrap">
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">Token Radar</p>
+      <h1>Pre-token protocols, ranked by implied value</h1>
+      <p class="howto">How to read this: implied value is a model estimate built from TVL, 7-day growth and age — it is not a price and not a promise. Protocols whose token already trades are set aside in the Live view at the market&rsquo;s own market cap, never at a model value.</p>
+    </div>
+    <dl class="meta" aria-label="Snapshot details">
+      <div><dt>Snapshot</dt><dd id="asof">—</dd></div>
+      <div><dt>Model</dt><dd id="mver">—</dd></div>
+      <div><dt>Watchlist</dt><dd id="watch-n">—</dd></div>
+      <div><dt>Board</dt><dd id="board-n">—</dd></div>
+      <div><dt>Live tokens</dt><dd id="live-n">—</dd></div>
+    </dl>
+  </header>
+
+  <main id="main">
+    <section class="controls" aria-label="Board filters">
+      <div class="field grow">
+        <label for="q">Search</label>
+        <input id="q" type="search" placeholder="Search name, slug, category or chain" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="cat">Category</label>
+        <select id="cat"></select>
+      </div>
+      <div class="field">
+        <label for="chain">Chain</label>
+        <select id="chain"></select>
+      </div>
+      <div class="field check">
+        <input id="watch" type="checkbox">
+        <label for="watch">Watchlist only</label>
+      </div>
+      <div class="field tabs" role="group" aria-label="Token status view">
+        <button id="tab-board" type="button" aria-pressed="true">Board</button>
+        <button id="tab-live" type="button" aria-pressed="false">Live tokens</button>
+      </div>
+      <p class="count" id="count" role="status" aria-live="polite"></p>
+    </section>
+
+    <div class="panel" id="board-wrap" tabindex="-1">
+      <div class="scroll">
+        <table id="board">
+          <caption id="caption">Pre-token protocols, strongest implied value first. Select a row for its model breakdown and farm plan.</caption>
+          <thead id="thead"></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <p class="empty" id="empty" hidden>No protocol matches these filters. <button id="clear" type="button">Clear filters</button></p>
+    </div>
+
+    <section class="model-note" aria-labelledby="model-h">
+      <h2 id="model-h">How implied value is computed</h2>
+      <p id="model-text">Implied value = TVL × base multiple × growth multiplier × maturity multiplier. One function scores every row; no protocol name is special-cased.</p>
+      <p class="fine">Source: <span id="source">—</span>. The board covers the whole watchlist plus early pre-token protocols below the watchlist floor, ranked by implied value. A protocol is pre-token when its record records no token.</p>
+    </section>
+    <noscript><p class="empty">This dashboard needs JavaScript to render the board from the bundled snapshot.</p></noscript>
+  </main>
+
+  <dialog id="detail" aria-labelledby="detail-title">
+    <form method="dialog" class="dlg-close"><button type="submit" aria-label="Close details">Close ✕</button></form>
+    <div id="detail-body"></div>
+  </dialog>
+</div>
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
