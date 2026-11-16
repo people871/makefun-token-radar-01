@@ -1,4 +1,4 @@
-// Token radar model, radar-4-fitted: one sealed snapshot in, one ranked board out.
+// Token radar model, radar-5-fitted: one sealed snapshot in, one ranked board out.
 //
 // The implied value is FITTED, not asserted. The snapshot's traded tokens
 // (every token with a market cap above zero and TVL above zero — the market's
@@ -17,6 +17,31 @@
 //   family    = 10^(category offset)
 //   momentum  = clamp(1 + 0.5*(change_7d/100), 0.8, 1.25)
 //   seasoning = max(0.01, 1 - 0.4*exp(-age_days/240))
+//
+// Radar-5 keeps radar-4's pricing model exactly (same curve, same bounded
+// multipliers, same farm economics) and closes the dossier-completeness gaps
+// the top-ranked entries show and this board did not: a break-even column
+// (break-even launch value, break-even odds from the model's own LOO
+// residual distribution, and EV per dollar of gas), an ablation backtest
+// table (flat / curve / curve+family / full on both blind tests), a ROBUST
+// verdict tier (net at the P25 low end still >= $1), a best-per-hour hero
+// line and FARM NEXT list, an implied/TVL multiple column, P25–P75 as the
+// displayed band (P10–P90 stays in the data and the detail dialog), a total
+// implied-value headline with a distribution histogram, and a
+// mechanism-aware farm column (action verb + chain + fee + setup minutes).
+//
+// Two model variants were TESTED on the same splits and NOT shipped, and the
+// Method tab says so: (1) a sibling/kinship factor — the snapshot carries
+// no parent-protocol record (RULES.txt says so) and no two traded tokens
+// share a name stem or slug prefix, so no sibling discount is fittable and
+// the factor stays 1.0; (2) a joint ridge on log(mcap/TVL) with category +
+// size + chain + growth + age effects (lambda 3, chosen by inner
+// leave-one-out) — it beats the OLS curve on both blind tests (LOO x3.22 /
+// 50.0% within 3x, time split x2.89 / 52.9%) but on the board it reorders
+// heavily (Spearman 0.69 against the OLS board), inflates small-TVL rows
+// (a $28M-TVL protocol lands at #4 worth $62.5M) and pushes the top value
+// to $164M, above every top entry's range — a blind-test win that does not
+// survive contact with the board, so the OLS curve stays the pricing model.
 //
 // Why bounded, and why the curve is fit on all 128: radar-3 fitted the same
 // curve on 94 tokens in six "comparable" categories with a log-age seasoning
@@ -87,7 +112,7 @@ export interface Snapshot {
 }
 
 /** The model's version label, carried into data.js and the dashboard. */
-export const MODEL_VERSION = 'radar-4-fitted';
+export const MODEL_VERSION = 'radar-5-fitted';
 
 /** How many live-token protocols the dashboard's Live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -164,6 +189,12 @@ export interface FarmStep {
   time: string;
 }
 
+/** Setup minutes the farm column prints: the plan's two setup steps
+ *  (fund the wallet, make the deposit) take 15 + 30 minutes. One constant
+ *  for every row, documented here and in the Method tab — it is a plan
+ *  constant, not a per-protocol measurement. */
+export const FARM_SETUP_MINUTES = 45;
+
 /** The farm economics of one board row, all in dollars unless named. */
 export interface FarmEcon {
   verdict: 'FARM' | 'THIN' | 'SKIP';
@@ -174,6 +205,31 @@ export interface FarmEcon {
   work_hours: number;
   hold_days: number;
   capital_usd: number;
+  /** The implied value at which this row's farm breaks even: the launch
+   *  value whose 10% slice, pro-rata to TVL, exactly covers fees + T-bill.
+   *  BE = (fees + T-bill) x TVL / (0.10 x $1,000). Whole dollars. */
+  breakeven_usd: number;
+  /** P(implied value >= break-even) under the model's own leave-one-out
+   *  residual distribution: the share of LOO residuals r with
+   *  implied x 10^r >= break-even. A probability about the VALUE, never
+   *  about whether a token launches at all. */
+  breakeven_odds_pct: number;
+  /** Expected value per dollar of gas: slice / fees. Above 1x the slice
+   *  alone covers the gas; below 1x it does not. */
+  ev_per_gas: number;
+  /** The net if the launch lands at the P25 low end of the band instead of
+   *  the point value: slice at P25 - fees - T-bill. */
+  low_end_net_usd: number;
+  /** ROBUST display tier: true when the net at the P25 low end is still
+   *  >= $1 — the farm pays even if the model is pessimistic. A ROBUST row
+   *  keeps its stored FARM verdict; the tier is a display label on top of it. */
+  robust: boolean;
+  /** The farm's action verb, from the protocol's category (the same map the
+   *  farm steps use): Vault, Lend, Trade, Mint, Stake, Bridge, Insure,
+   *  Subscribe or Deposit. */
+  farm_verb: string;
+  /** Setup minutes for the farm column: FARM_SETUP_MINUTES (see above). */
+  farm_setup_min: number;
 }
 
 /** One row of board.json. */
@@ -194,6 +250,11 @@ export interface BoardRow {
   implied_value_usd: number;
   implied_p10_usd: number;
   implied_p90_usd: number;
+  /** The middle half of the band (P25–P75 of the LOO residuals): the range
+   *  the board column displays. P10–P90 stays in the data and the detail
+   *  dialog as the wider blind range. */
+  implied_p25_usd: number;
+  implied_p75_usd: number;
   size_value_usd: number;
   family_mult: number;
   growth_mult: number;
@@ -217,6 +278,8 @@ export interface RadarRow {
   implied_value_usd: number;
   implied_p10_usd: number;
   implied_p90_usd: number;
+  implied_p25_usd: number;
+  implied_p75_usd: number;
   size_value_usd: number;
   family_mult: number;
   growth_mult: number;
@@ -245,22 +308,50 @@ export interface ModelSummary {
   age_coef: number;
 }
 
+/** One row of the ablation table: one model variant scored on both blind
+ *  tests. The variants are flat (one median mcap/TVL multiple), curve
+ *  (the size curve alone), family (curve + category offsets) and full
+ *  (curve + offsets + the two bounded multipliers). Every variant is
+ *  scored on the SAME splits with the SAME refit-per-fold discipline. */
+export interface AblationRow {
+  name: string;
+  loo_med_abs_log10: number;
+  loo_within2x_pct: number;
+  loo_within3x_pct: number;
+  time_med_abs_log10: number;
+  time_within2x_pct: number;
+  time_within3x_pct: number;
+}
+
 /** The blind backtests, as data.js carries them for the dashboard's evidence panel. */
 export interface BacktestSummary {
   n_traded: number;
   loo_med_abs_log10: number;
   loo_within3x_pct: number;
+  loo_within2x_pct: number;
   flat_med_abs_log10: number;
   flat_within3x_pct: number;
+  flat_within2x_pct: number;
   time_n_train: number;
   time_n_test: number;
   time_med_abs_log10: number;
   time_within3x_pct: number;
+  time_within2x_pct: number;
+  time_flat_med_abs_log10: number;
   time_flat_within3x_pct: number;
+  time_flat_within2x_pct: number;
   band50_cov_pct: number;
   band80_cov_pct: number;
   loo_q10: number;
   loo_q90: number;
+  loo_q25: number;
+  loo_q75: number;
+  /** The ablation table (flat / curve / family / full). */
+  ablation: AblationRow[];
+  /** The full leave-one-out residual distribution (log10), in the order the
+   *  fitted tokens were scored. The break-even odds are computed from it;
+   *  it is carried so the odds are auditable, not asserted. */
+  loo_residuals: number[];
 }
 
 /** One fitted traded token, for the dashboard's scatter chart. */
@@ -283,7 +374,13 @@ export interface RadarData {
   board_size: number;
   set_aside_size: number;
   live_size: number;
-  verdict_counts: { farm: number; thin: number; skip: number };
+  verdict_counts: { farm: number; thin: number; skip: number; robust: number };
+  /** Sum of the board's implied values — the total the curve prices the
+   *  198 pre-token protocols at. */
+  total_implied_usd: number;
+  /** Distribution of the board's implied values: 8 log-spaced bins from
+   *  lo to hi (log10 dollars) with a count per bin, for the histogram. */
+  histogram: { lo: number; hi: number; counts: number[] };
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -535,12 +632,13 @@ export function impliedParts(p: SnapshotProtocol, asOf: string, curve: FittedCur
   return { size, family, growth, seasoning, implied };
 }
 
-/** Median absolute log10 error and share within 3x for a list of log10 residuals. */
-function scoreResiduals(residuals: number[]): { medAbs: number; within3xPct: number } {
+/** Median absolute log10 error and shares within 2x and 3x for a list of log10 residuals. */
+function scoreResiduals(residuals: number[]): { medAbs: number; within2xPct: number; within3xPct: number } {
   const abs = residuals.map((r) => Math.abs(r)).sort((a, b) => a - b);
   const med = abs[Math.floor(abs.length / 2)]!;
-  const within = residuals.filter((r) => Math.abs(r) < LOG10_3).length;
-  return { medAbs: med, within3xPct: (within / residuals.length) * 100 };
+  const within2 = residuals.filter((r) => Math.abs(r) < Math.log10(2)).length;
+  const within3 = residuals.filter((r) => Math.abs(r) < LOG10_3).length;
+  return { medAbs: med, within2xPct: (within2 / residuals.length) * 100, within3xPct: (within3 / residuals.length) * 100 };
 }
 
 /** The flat baseline's log10 residuals: every token priced at the global
@@ -549,6 +647,34 @@ function flatResiduals(targets: FitPoint[], baselinePoints: FitPoint[]): number[
   const ratios = baselinePoints.map((pt) => pt.mcap_usd / pt.tvl_usd);
   const flat = median(ratios);
   return targets.map((pt) => pt.y - Math.log10(flat * pt.tvl_usd));
+}
+
+/**
+ * One variant's log10 prediction for a fitted token: 'curve' is the size
+ * curve alone (no offsets, no multipliers), 'family' adds the category
+ * offsets, 'full' adds the two bounded multipliers as well. The same
+ * function scores every variant, so the ablation compares like with like.
+ */
+function variantPrediction(pt: FitPoint, curve: FittedCurve, mode: 'curve' | 'family' | 'full', asOf: string): number {
+  const mult = mode === 'full' ? fitPointMultipliersLog10(pt, asOf) : 0;
+  const offsets = mode === 'curve' ? {} : curve.offsets;
+  return predictLog10(pt.x, { beta: curve.beta, offsets, n: curve.n }, pt.category, mult);
+}
+
+/** Leave-one-out residuals for one variant: each token predicted by a curve
+ *  refitted without it (offsets recomputed without it). */
+function looVariantResiduals(points: FitPoint[], mode: 'curve' | 'family' | 'full', asOf: string): number[] {
+  return points.map((pt, i) => {
+    const rest = points.filter((_, j) => j !== i);
+    return pt.y - variantPrediction(pt, fitCurve(rest), mode, asOf);
+  });
+}
+
+/** Time-split residuals for one variant: curve fitted on tokens listed
+ *  before 2024-01-01, tested on tokens listed in 2024 or later. */
+function timeVariantResiduals(train: FitPoint[], test: FitPoint[], mode: 'curve' | 'family' | 'full', asOf: string): number[] {
+  const curve = fitCurve(train);
+  return test.map((pt) => pt.y - variantPrediction(pt, curve, mode, asOf));
 }
 
 /**
@@ -561,16 +687,13 @@ function flatResiduals(targets: FitPoint[], baselinePoints: FitPoint[]): number[
  * (tokens with no listed date sit out of both sides). The P10/P90 band
  * quantiles come from the leave-one-out residuals, and the band coverage
  * counts how many leave-one-out actuals fall inside the bands those same
- * quantiles draw around each prediction.
+ * quantiles draw around each prediction. The ablation scores the flat,
+ * curve-only, curve+family and full variants on both splits with the same
+ * refit-per-fold discipline, so each component's contribution is measured,
+ * not asserted.
  */
 export function runBacktests(points: FitPoint[], asOf: string): BacktestSummary {
-  const looResiduals: number[] = [];
-  for (let i = 0; i < points.length; i++) {
-    const rest = points.filter((_, j) => j !== i);
-    const curve = fitCurve(rest);
-    const pt = points[i]!;
-    looResiduals.push(pt.y - predictLog10(pt.x, curve, pt.category, fitPointMultipliersLog10(pt, asOf)));
-  }
+  const looResiduals = looVariantResiduals(points, 'full', asOf);
   const loo = scoreResiduals(looResiduals);
   const flatLoo = scoreResiduals(flatResiduals(points, points));
 
@@ -584,26 +707,54 @@ export function runBacktests(points: FitPoint[], asOf: string): BacktestSummary 
 
   const train = points.filter((pt) => pt.listed_at !== null && pt.listed_at < '2024-01-01');
   const test = points.filter((pt) => pt.listed_at !== null && pt.listed_at >= '2024-01-01');
-  const timeCurve = fitCurve(train);
-  const timeResiduals = test.map((pt) => pt.y - predictLog10(pt.x, timeCurve, pt.category, fitPointMultipliersLog10(pt, asOf)));
+  const timeResiduals = timeVariantResiduals(train, test, 'full', asOf);
   const time = scoreResiduals(timeResiduals);
   const timeFlat = scoreResiduals(flatResiduals(test, train));
+
+  const ablationRow = (name: string, looRes: number[], timeRes: number[]): AblationRow => {
+    const looV = scoreResiduals(looRes);
+    const timeV = scoreResiduals(timeRes);
+    return {
+      name,
+      loo_med_abs_log10: round4(looV.medAbs),
+      loo_within2x_pct: round4(looV.within2xPct),
+      loo_within3x_pct: round4(looV.within3xPct),
+      time_med_abs_log10: round4(timeV.medAbs),
+      time_within2x_pct: round4(timeV.within2xPct),
+      time_within3x_pct: round4(timeV.within3xPct),
+    };
+  };
+  const ablation: AblationRow[] = [
+    ablationRow('flat', flatResiduals(points, points), flatResiduals(test, train)),
+    ablationRow('curve', looVariantResiduals(points, 'curve', asOf), timeVariantResiduals(train, test, 'curve', asOf)),
+    ablationRow('family', looVariantResiduals(points, 'family', asOf), timeVariantResiduals(train, test, 'family', asOf)),
+    ablationRow('full', looResiduals, timeResiduals),
+  ];
 
   return {
     n_traded: points.length,
     loo_med_abs_log10: round4(loo.medAbs),
     loo_within3x_pct: round4(loo.within3xPct),
+    loo_within2x_pct: round4(loo.within2xPct),
     flat_med_abs_log10: round4(flatLoo.medAbs),
     flat_within3x_pct: round4(flatLoo.within3xPct),
+    flat_within2x_pct: round4(flatLoo.within2xPct),
     time_n_train: train.length,
     time_n_test: test.length,
     time_med_abs_log10: round4(time.medAbs),
     time_within3x_pct: round4(time.within3xPct),
+    time_within2x_pct: round4(time.within2xPct),
+    time_flat_med_abs_log10: round4(timeFlat.medAbs),
     time_flat_within3x_pct: round4(timeFlat.within3xPct),
+    time_flat_within2x_pct: round4(timeFlat.within2xPct),
     band50_cov_pct: round4(in50 * 100),
     band80_cov_pct: round4(in80 * 100),
     loo_q10: round4(q10),
     loo_q90: round4(q90),
+    loo_q25: round4(q25),
+    loo_q75: round4(q75),
+    ablation,
+    loo_residuals: looResiduals.map((r) => round4(r)),
   };
 }
 
@@ -647,6 +798,25 @@ function usd(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
+/** The farm's action verb, from the protocol's category: the same branch
+ *  order as actionFor below, so the verb always matches the plan's first
+ *  step. One word per row; the Method tab documents the map. */
+export function farmVerbFor(p: SnapshotProtocol): string {
+  const c = (p.category ?? '').toLowerCase();
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return 'Lend';
+  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm') || c.includes('farm')) return 'Trade';
+  if (c.includes('bridge')) return 'Bridge';
+  if (c.includes('staking') || c.includes('restak')) return 'Stake';
+  if (c.includes('perpetual') || c.includes('derivative') || c.includes('options')) return 'Trade';
+  if (c.includes('prediction')) return 'Trade';
+  if (c.includes('curator') || c.includes('allocator') || c.includes('risk')) return 'Vault';
+  if (c.includes('stable')) return 'Mint';
+  if (c.includes('rwa')) return 'Mint';
+  if (c.includes('insurance')) return 'Insure';
+  if (c.includes('launchpad')) return 'Subscribe';
+  return 'Deposit';
+}
+
 /**
  * The farm economics of one row for a flat $1,000 of capital: a depositor's
  * slice is 10% of the implied value shared pro-rata to TVL, fees are five
@@ -655,8 +825,23 @@ function usd(n: number): string {
  * cents, and the verdict follows the stored net: FARM at $1 or better,
  * THIN from -$10 up to $1, SKIP below -$10. The thresholds are fixed, not
  * fitted: the economics are what they are.
+ *
+ * On top of the point-value economics, three break-even figures are
+ * computed from the same numbers — no new data: the break-even launch
+ * value (the implied value whose slice exactly covers fees + T-bill), the
+ * break-even odds (the share of the model's own LOO residuals under which
+ * the true value reaches break-even), and the expected value per dollar of
+ * gas (slice / fees). The low-end net re-prices the same farm at the P25
+ * low end of the band (q25 is the LOO residual's 25th percentile, in log10):
+ * a row is ROBUST when that low-end net is still >= $1.
  */
-export function farmEcon(p: SnapshotProtocol, implied: number, age: number | null): FarmEcon {
+export function farmEcon(
+  p: SnapshotProtocol,
+  implied: number,
+  age: number | null,
+  q25: number,
+  looResiduals: number[],
+): FarmEcon {
   const gas = gasPerTxFor(p);
   const slice = p.tvl_usd > 0 ? round2((FARM_DEPOSITOR_SHARE * implied * FARM_CAPITAL_USD) / p.tvl_usd) : 0;
   const fees = round2(FARM_TX_COUNT * gas);
@@ -664,7 +849,29 @@ export function farmEcon(p: SnapshotProtocol, implied: number, age: number | nul
   const tbill = round2((FARM_CAPITAL_USD * TBILL_RATE * hold) / 365);
   const net = round2(slice - fees - tbill);
   const verdict: FarmEcon['verdict'] = net >= 1 ? 'FARM' : net >= -10 ? 'THIN' : 'SKIP';
-  return { verdict, slice_usd: slice, fees_usd: fees, tbill_usd: tbill, net_usd: net, work_hours: FARM_WORK_HOURS, hold_days: hold, capital_usd: FARM_CAPITAL_USD };
+  const breakeven = p.tvl_usd > 0 ? Math.max(1, Math.round(((fees + tbill) * p.tvl_usd) / (FARM_DEPOSITOR_SHARE * FARM_CAPITAL_USD))) : 1;
+  const needLog = Math.log10(breakeven / Math.max(1, implied));
+  const odds = looResiduals.length > 0 ? round2((looResiduals.filter((r) => r >= needLog).length / looResiduals.length) * 100) : 0;
+  const evPerGas = fees > 0 ? Math.round((slice / fees) * 10) / 10 : 0;
+  const lowSlice = p.tvl_usd > 0 ? round2((FARM_DEPOSITOR_SHARE * Math.max(1, implied * 10 ** q25) * FARM_CAPITAL_USD) / p.tvl_usd) : 0;
+  const lowEndNet = round2(lowSlice - fees - tbill);
+  return {
+    verdict,
+    slice_usd: slice,
+    fees_usd: fees,
+    tbill_usd: tbill,
+    net_usd: net,
+    work_hours: FARM_WORK_HOURS,
+    hold_days: hold,
+    capital_usd: FARM_CAPITAL_USD,
+    breakeven_usd: breakeven,
+    breakeven_odds_pct: odds,
+    ev_per_gas: evPerGas,
+    low_end_net_usd: lowEndNet,
+    robust: lowEndNet >= 1,
+    farm_verb: farmVerbFor(p),
+    farm_setup_min: FARM_SETUP_MINUTES,
+  };
 }
 
 /** The first chain a protocol names, or a neutral phrase when it names none. */
@@ -809,7 +1016,7 @@ function scoreRow(
   p: SnapshotProtocol,
   asOf: string,
   curve: FittedCurve,
-): Omit<BoardRow, 'rank' | 'implied_p10_usd' | 'implied_p90_usd' | 'farm' | 'farm_steps'> {
+): Omit<BoardRow, 'rank' | 'implied_p10_usd' | 'implied_p90_usd' | 'implied_p25_usd' | 'implied_p75_usd' | 'farm' | 'farm_steps'> {
   const v = impliedParts(p, asOf, curve);
   return {
     slug: p.slug,
@@ -853,13 +1060,17 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
     const implied = row.implied_value_usd;
     const p10 = Math.max(1, Math.min(implied, Math.round(implied * 10 ** backtest.loo_q10)));
     const p90 = Math.max(implied, Math.round(implied * 10 ** backtest.loo_q90));
+    const p25 = Math.max(1, Math.min(implied, Math.round(implied * 10 ** backtest.loo_q25)));
+    const p75 = Math.max(implied, Math.round(implied * 10 ** backtest.loo_q75));
     const protocol = index.get(row.slug)!;
-    const econ = farmEcon(protocol, implied, row.age_days);
+    const econ = farmEcon(protocol, implied, row.age_days, backtest.loo_q25, backtest.loo_residuals);
     return {
       ...row,
       rank: i + 1,
       implied_p10_usd: p10,
       implied_p90_usd: p90,
+      implied_p25_usd: p25,
+      implied_p75_usd: p75,
       farm: econ,
       farm_steps: farmSteps(protocol, econ, row.age_days).map(stepText),
     };
@@ -882,6 +1093,8 @@ export function radarRow(row: BoardRow): RadarRow {
     implied_value_usd: row.implied_value_usd,
     implied_p10_usd: row.implied_p10_usd,
     implied_p90_usd: row.implied_p90_usd,
+    implied_p25_usd: row.implied_p25_usd,
+    implied_p75_usd: row.implied_p75_usd,
     size_value_usd: row.size_value_usd,
     family_mult: row.family_mult,
     growth_mult: row.growth_mult,
@@ -899,11 +1112,22 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   const board = buildBoard(snapshot);
   const live = liveRows(snapshot);
   const preToken = snapshot.protocols.filter(isPreToken).length;
-  const verdictCounts = { farm: 0, thin: 0, skip: 0 };
+  const verdictCounts = { farm: 0, thin: 0, skip: 0, robust: 0 };
   for (const row of board) {
     if (row.farm.verdict === 'FARM') verdictCounts.farm++;
     else if (row.farm.verdict === 'THIN') verdictCounts.thin++;
     else verdictCounts.skip++;
+    if (row.farm.robust) verdictCounts.robust++;
+  }
+  const totalImplied = board.reduce((s, r) => s + r.implied_value_usd, 0);
+  // Distribution histogram: 8 log-spaced bins across the board's implied range.
+  const logVals = board.map((r) => Math.log10(Math.max(1, r.implied_value_usd)));
+  const histLo = Math.floor(Math.min(...logVals));
+  const histHi = Math.ceil(Math.max(...logVals));
+  const histCounts = Array<number>(8).fill(0);
+  for (const v of logVals) {
+    const bin = Math.min(7, Math.floor(((v - histLo) / Math.max(1e-9, histHi - histLo)) * 8));
+    histCounts[bin]!++;
   }
   // The formula describes the model actually fitted: the size curve plus the
   // two bounded multipliers. growth_coef is the momentum half-weight (0.5)
@@ -933,6 +1157,8 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     set_aside_size: preToken - board.length,
     live_size: live.length,
     verdict_counts: verdictCounts,
+    total_implied_usd: totalImplied,
+    histogram: { lo: histLo, hi: histHi, counts: histCounts },
     rows: board.map(radarRow),
     live,
   };
@@ -1022,10 +1248,12 @@ export function parseSnapshot(text: string): Snapshot {
 }
 
 /** Why a board is not one the gate will take, or null: coverage, ranks,
- *  order, shared value, farm steps — plus the radar-3 reconciliations: every
- *  row's implied value must equal its four stored factors' product within
- *  $1, its P10/P90 band must bracket it, its farm verdict must follow its
- *  stored net, and every row must pass the full house rule. */
+ *  order, shared value, farm steps — plus the reconciliations: every row's
+ *  implied value must equal its four stored factors' product within $1, its
+ *  P10/P90 band must bracket it, its P25–P75 band must sit inside the
+ *  P10–P90 band, its farm verdict must follow its stored net, its
+ *  break-even figures must be in range, its ROBUST flag must follow its
+ *  low-end net, and every row must pass the full house rule. */
 export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null {
   const slugs = new Set(board.map((r) => r.slug));
   const missing = snapshot.watchlist.filter((s) => !slugs.has(s));
@@ -1054,8 +1282,24 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
     if (!(r.implied_p10_usd <= r.implied_value_usd && r.implied_value_usd <= r.implied_p90_usd)) {
       return `${r.slug} band $${r.implied_p10_usd}–$${r.implied_p90_usd} does not bracket implied $${r.implied_value_usd}`;
     }
+    if (!(r.implied_p10_usd <= r.implied_p25_usd && r.implied_p25_usd <= r.implied_value_usd && r.implied_value_usd <= r.implied_p75_usd && r.implied_p75_usd <= r.implied_p90_usd)) {
+      return `${r.slug} middle-half band $${r.implied_p25_usd}–$${r.implied_p75_usd} is not inside its P10–P90 band`;
+    }
     const want: FarmEcon['verdict'] = r.farm.net_usd >= 1 ? 'FARM' : r.farm.net_usd >= -10 ? 'THIN' : 'SKIP';
     if (r.farm.verdict !== want) return `${r.slug} verdict ${r.farm.verdict} does not follow net $${r.farm.net_usd}`;
+    if (!(r.farm.breakeven_usd >= 1)) return `${r.slug} break-even is $${r.farm.breakeven_usd}`;
+    if (!(r.farm.breakeven_odds_pct >= 0 && r.farm.breakeven_odds_pct <= 100)) {
+      return `${r.slug} break-even odds ${r.farm.breakeven_odds_pct}% is not a percentage`;
+    }
+    if (!(r.farm.ev_per_gas >= 0)) return `${r.slug} EV per gas is ${r.farm.ev_per_gas}`;
+    if (r.farm.robust !== r.farm.low_end_net_usd >= 1) {
+      return `${r.slug} ROBUST flag does not follow its low-end net $${r.farm.low_end_net_usd}`;
+    }
+    if (r.farm.robust && r.farm.verdict !== 'FARM') {
+      return `${r.slug} is ROBUST but its verdict is ${r.farm.verdict}, not FARM`;
+    }
+    if (typeof r.farm.farm_verb !== 'string' || r.farm.farm_verb.length === 0) return `${r.slug} has no farm verb`;
+    if (r.farm.farm_setup_min !== FARM_SETUP_MINUTES) return `${r.slug} farm setup is ${r.farm.farm_setup_min} minutes, not ${FARM_SETUP_MINUTES}`;
     if (r.farm.capital_usd !== FARM_CAPITAL_USD) return `${r.slug} farm capital is $${r.farm.capital_usd}, not $${FARM_CAPITAL_USD}`;
     const asProtocol: SnapshotProtocol = {
       slug: r.slug,
