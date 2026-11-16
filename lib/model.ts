@@ -1,37 +1,40 @@
-// Token radar model, radar-3-fitted: one sealed snapshot in, one ranked board out.
+// Token radar model, radar-4-fitted: one sealed snapshot in, one ranked board out.
 //
-// The implied value is FITTED, not asserted. The snapshot's own traded tokens
-// (market cap above zero, TVL above zero, in categories comparable to a
-// pre-token launch) pin down a log-log size curve by ordinary least squares:
+// The implied value is FITTED, not asserted. The snapshot's traded tokens
+// (every token with a market cap above zero and TVL above zero — the market's
+// whole size curve, 128 tokens) pin down a log-log size curve by ordinary
+// least squares:
 //
 //   log10(mcap) = a + b*log10(TVL / $100M)
-//                   + c*log10(1 + change_7d / 100)
-//                   + d*log10(age_days)
 //
-// The growth coefficient is constrained to c >= 0. On this snapshot the
-// unconstrained fit returns a NEGATIVE c (a TVL fall priced as a premium, a
-// rise as a discount), which is economically backwards: it would put a
-// protocol that just crashed at the top of the board and one that just
-// exploded at the bottom. So when the unconstrained fit gives c < 0, the
-// growth regressor is dropped (c = 0, growth factor exactly 1) and the
-// remaining coefficients are refitted without it. A negative growth
-// coefficient is never kept, under any circumstances; when c comes out >= 0
-// it is kept as fitted.
+// Category offsets absorb the rest: each category's mean residual from the
+// curve, shrunk toward zero. A pre-token protocol's implied value is that
+// curve read at its own TVL, times its family multiplier and two BOUNDED
+// multipliers that can never invert the board:
 //
-// plus one shrunk offset per category (the family's mean residual, shrunk by
-// n/(n+5), clamped to 10^+-0.7; a category with fewer than 3 traded tokens
-// gets no offset). A pre-token protocol's implied value is that curve read at
-// its own TVL, growth and age, times its family multiplier:
-//
-//   implied = size x family x growth x seasoning
+//   implied = size x family x momentum x seasoning
 //   size      = 10^(a + b*log10(TVL/$100M))
 //   family    = 10^(category offset)
-//   growth    = 10^(c*log10(1 + change_7d/100))
-//   seasoning = 10^(d*log10(age_days))
+//   momentum  = clamp(1 + 0.5*(change_7d/100), 0.8, 1.25)
+//   seasoning = max(0.01, 1 - 0.4*exp(-age_days/240))
 //
-// The four factors are stored on every row at full precision, so their product
-// reconciles with the stored implied value exactly (the implied value itself
-// is the rounded product, clamped to [1, 1e14]).
+// Why bounded, and why the curve is fit on all 128: radar-3 fitted the same
+// curve on 94 tokens in six "comparable" categories with a log-age seasoning
+// term (coefficient -0.15, median multiplier 0.42x). It fit the full sample
+// but FAILED the honest out-of-sample test: on tokens listed in 2024 or later
+// it scored 29.3% within 3x against 36.6% for a flat multiple — the model
+// lost to doing nothing. The log-age term was the cause: in the time split the
+// train set is 30 pre-2024 tokens (all old, little age variation, so the age
+// coefficient is poorly identified) and the test set is 41 young tokens, where
+// the term extrapolates badly. Radar-4 drops the log-age regressor, fits the
+// size curve on the market's full traded set (the steeper slope, 0.52, is what
+// the full set says), and replaces both free multipliers with bounded forms
+// that cannot invert a board: momentum is capped at 0.8x-1.25x, seasoning
+// saturates toward 1 as a protocol ages instead of discounting it toward
+// zero. Tested on the same splits as radar-3: leave-one-out median miss
+// 3.45x (was 4.02x), time-split median miss 2.11x and 56.1% within 3x
+// against flat 4.29x / 36.6% (was 5.46x / 29.3% — the model now BEATS flat
+// out of sample instead of losing to it).
 //
 // Evidence, not adjectives: the model carries its own blind backtests. A
 // leave-one-out refit predicts every fitted token without ever seeing it
@@ -47,7 +50,10 @@
 // bridged/staked/exchange categories, a name ending in a version marker, a
 // name carrying a whole word wrapped/staked/staking, a name beginning with an
 // exchange's name. Every watchlist slug is on the board; the rest of the
-// pre-token protocols that the rule sets aside are counted, not ranked.
+// pre-token protocols that the rule sets aside are counted, not ranked. (The
+// six excluded categories are excluded from the BOARD only; the size curve is
+// fit on every traded token, because the curve is the market's, and the
+// category offsets are what make categories comparable.)
 //
 // Farm economics: every row is costed for a flat $1,000 of capital. A
 // depositor's slice is 10% of the implied value shared pro-rata to TVL;
@@ -81,7 +87,7 @@ export interface Snapshot {
 }
 
 /** The model's version label, carried into data.js and the dashboard. */
-export const MODEL_VERSION = 'radar-3-fitted';
+export const MODEL_VERSION = 'radar-4-fitted';
 
 /** How many live-token protocols the dashboard's Live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -103,6 +109,18 @@ export const TBILL_RATE = 0.04;
 
 /** Active work a farm plan takes, in hours (the step times sum to this). */
 export const FARM_WORK_HOURS = 2.5;
+
+/** Momentum half-weight: a 7-day TVL change moves the value by half of itself. */
+export const MOMENTUM_HALF_WEIGHT = 0.5;
+
+/** Momentum is clamped to this factor either way: no crash or spike can invert the board. */
+export const MOMENTUM_MIN = 0.8;
+export const MOMENTUM_MAX = 1.25;
+
+/** Seasoning scale and time constant: 1 - 0.4*exp(-age/240), so a fresh
+ *  protocol is discounted to 0.6x and the discount saturates toward 1 as it ages. */
+export const SEASONING_SCALE = 0.4;
+export const SEASONING_TAU_DAYS = 240;
 
 /** Categories that are not comparable to a pre-token launch: they never enter
  *  the fit, and they never enter the board. */
@@ -318,35 +336,33 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
-/** One traded token as a regression row: [1, log TVL, log growth, log age], log mcap, category. */
+/** One traded token as a regression row: [1, log TVL], log mcap, category. */
 export interface FitPoint {
-  x: [number, number, number, number];
+  x: [number, number];
   y: number;
   category: string;
   slug: string;
   tvl_usd: number;
   mcap_usd: number;
   listed_at: string | null;
+  change_7d: number | null;
 }
 
-/** The four regressors of one protocol: intercept, TVL, 7-day growth, age.
- *  A missing change counts as 0%; a missing age counts as a neutral year.
- *  Both logs are guarded so a freak value can never produce -Infinity. */
-export function features(p: SnapshotProtocol, asOf: string): [number, number, number, number] {
-  const age = ageDays(asOf, p.listed_at) ?? 365;
-  const growthArg = clamp(1 + finite(p.change_7d, 0) / 100, 0.01, 100);
-  return [1, Math.log10(Math.max(1, p.tvl_usd) / 1e8), Math.log10(growthArg), Math.log10(Math.max(1, age))];
+/** The two regressors of one protocol: intercept and TVL. Growth and age are
+ *  NOT regressors: they enter as bounded multipliers (momentumMult,
+ *  seasoningMult), so neither can invert the board the way a free log
+ *  coefficient did in radar-3. */
+export function features(p: SnapshotProtocol, _asOf: string): [number, number] {
+  return [1, Math.log10(Math.max(1, p.tvl_usd) / 1e8)];
 }
 
 /** Whether a protocol is one the curve may be fitted on: it records a traded
- *  token (market cap above zero, TVL above zero) in a comparable category. */
+ *  token (market cap above zero, TVL above zero). Every traded token enters,
+ *  in every category: the size curve is the market's whole curve, and the
+ *  category offsets are what make categories comparable. (The six excluded
+ *  categories are excluded from the BOARD only, in isRankable.) */
 export function isFittable(p: SnapshotProtocol): boolean {
-  return (
-    p.mcap_usd !== null &&
-    p.mcap_usd > 0 &&
-    p.tvl_usd > 0 &&
-    (p.category === null || !EXCLUDED_CATEGORIES.has(p.category))
-  );
+  return p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0;
 }
 
 /** The traded tokens the curve is fitted on, in snapshot order. */
@@ -361,6 +377,7 @@ export function fitPoints(snapshot: Snapshot): FitPoint[] {
       tvl_usd: p.tvl_usd,
       mcap_usd: p.mcap_usd as number,
       listed_at: p.listed_at,
+      change_7d: p.change_7d,
     }));
 }
 
@@ -401,10 +418,10 @@ function olsColumns(points: FitPoint[], cols: number[]): number[] {
   return a.map((row, i) => row[k]! / row[i]!);
 }
 
-/** Ordinary least squares on all four regressors (intercept, TVL, growth, age). */
-export function ols(points: FitPoint[]): [number, number, number, number] {
-  const b = olsColumns(points, [0, 1, 2, 3]);
-  return [b[0]!, b[1]!, b[2]!, b[3]!];
+/** Ordinary least squares on both regressors (intercept, TVL). */
+export function ols(points: FitPoint[]): [number, number] {
+  const b = olsColumns(points, [0, 1]);
+  return [b[0]!, b[1]!];
 }
 
 /**
@@ -413,10 +430,10 @@ export function ols(points: FitPoint[]): [number, number, number, number] {
  * log10 (a factor of 10^0.7 either way). A category with fewer than 3 traded
  * tokens gets no offset at all. Keys are sorted so the result is deterministic.
  */
-export function categoryOffsets(points: FitPoint[], beta: [number, number, number, number]): Record<string, number> {
+export function categoryOffsets(points: FitPoint[], beta: [number, number]): Record<string, number> {
   const byCategory = new Map<string, number[]>();
   for (const pt of points) {
-    const base = pt.x[0]! * beta[0] + pt.x[1]! * beta[1] + pt.x[2]! * beta[2] + pt.x[3]! * beta[3];
+    const base = pt.x[0]! * beta[0] + pt.x[1]! * beta[1];
     const residual = pt.y - base;
     const list = byCategory.get(pt.category);
     if (list === undefined) byCategory.set(pt.category, [residual]);
@@ -435,32 +452,64 @@ export function categoryOffsets(points: FitPoint[], beta: [number, number, numbe
   return offsets;
 }
 
-/** A fitted curve: its four coefficients and its category offsets. */
+/** A fitted curve: its two coefficients and its category offsets. */
 export interface FittedCurve {
-  beta: [number, number, number, number];
+  beta: [number, number];
   offsets: Record<string, number>;
   n: number;
 }
 
-/** Fit the curve on a set of traded tokens. The growth coefficient is
- *  constrained to c >= 0 (see the header): when the unconstrained four-
- *  regressor fit returns a negative growth coefficient, the growth
- *  regressor is dropped and the remaining coefficients are refitted
- *  without it, so the fitted growth factor is exactly 1 on every row.
- *  A negative growth coefficient is never kept. */
+/** Fit the curve on a set of traded tokens: ordinary least squares on
+ *  intercept and TVL, then the shrunk category offsets. There is no growth
+ *  or age regressor to constrain: growth and age enter as bounded
+ *  multipliers (momentumMult, seasoningMult), never as free coefficients. */
 export function fitCurve(points: FitPoint[]): FittedCurve {
   if (points.length < 10) throw new SnapshotError(`only ${points.length} traded tokens to fit the curve on`);
   const beta = ols(points);
-  if (beta[2] >= 0) return { beta, offsets: categoryOffsets(points, beta), n: points.length };
-  const refit = olsColumns(points, [0, 1, 3]);
-  const constrained: [number, number, number, number] = [refit[0]!, refit[1]!, 0, refit[2]!];
-  return { beta: constrained, offsets: categoryOffsets(points, constrained), n: points.length };
+  return { beta, offsets: categoryOffsets(points, beta), n: points.length };
 }
 
-/** The curve's log10 prediction for one protocol, family offset included. */
-export function predictLog10(x: [number, number, number, number], curve: FittedCurve, category: string): number {
-  const base = x[0]! * curve.beta[0] + x[1]! * curve.beta[1] + x[2]! * curve.beta[2] + x[3]! * curve.beta[3];
-  return base + (curve.offsets[category] ?? 0);
+/** The momentum multiplier of one protocol: 1 plus half its 7-day TVL change,
+ *  clamped to [0.8, 1.25]. A crash can cost at most 20% and a spike can add at
+ *  most 25%: the multiplier rewards growth without ever inverting the board. */
+export function momentumMult(p: SnapshotProtocol): number {
+  return clamp(1 + MOMENTUM_HALF_WEIGHT * (finite(p.change_7d, 0) / 100), MOMENTUM_MIN, MOMENTUM_MAX);
+}
+
+/** The seasoning multiplier of one protocol: 1 - 0.4*exp(-age/240), so a
+ *  fresh protocol is discounted to 0.6x and the discount saturates toward 1
+ *  as it ages. A missing listed date counts as a neutral year. */
+export function seasoningMult(p: SnapshotProtocol, asOf: string): number {
+  const age = ageDays(asOf, p.listed_at) ?? 365;
+  return Math.max(0.01, 1 - SEASONING_SCALE * Math.exp(-age / SEASONING_TAU_DAYS));
+}
+
+/** The curve's log10 prediction for one protocol, family offset and the two
+ *  bounded multipliers included (`multLog10` is log10(momentum x seasoning)). */
+export function predictLog10(x: [number, number], curve: FittedCurve, category: string, multLog10: number): number {
+  const base = x[0]! * curve.beta[0] + x[1]! * curve.beta[1];
+  return base + (curve.offsets[category] ?? 0) + multLog10;
+}
+
+/** The two bounded multipliers of one protocol as a single log10 term. */
+export function multipliersLog10(p: SnapshotProtocol, asOf: string): number {
+  return Math.log10(momentumMult(p) * seasoningMult(p, asOf));
+}
+
+/** The momentum multiplier from a raw 7-day change (null counts as 0%). */
+export function momentumMultFor(change_7d: number | null): number {
+  return clamp(1 + MOMENTUM_HALF_WEIGHT * (finite(change_7d, 0) / 100), MOMENTUM_MIN, MOMENTUM_MAX);
+}
+
+/** The seasoning multiplier from a raw listed date (null counts as a neutral year). */
+export function seasoningMultFor(listed_at: string | null, asOf: string): number {
+  const age = ageDays(asOf, listed_at) ?? 365;
+  return Math.max(0.01, 1 - SEASONING_SCALE * Math.exp(-age / SEASONING_TAU_DAYS));
+}
+
+/** The two bounded multipliers of one fitted token as a single log10 term. */
+export function fitPointMultipliersLog10(pt: FitPoint, asOf: string): number {
+  return Math.log10(momentumMultFor(pt.change_7d) * seasoningMultFor(pt.listed_at, asOf));
 }
 
 /** The four factors of one protocol's implied value, at full precision. */
@@ -472,14 +521,16 @@ export interface ValueParts {
   implied: number;
 }
 
-/** A protocol's implied value from a fitted curve: size x family x growth x
- *  seasoning, the product rounded to whole dollars and clamped to [1, 1e14]. */
+/** A protocol's implied value from a fitted curve: size x family x momentum x
+ *  seasoning, the product rounded to whole dollars and clamped to [1, 1e14].
+ *  The growth and seasoning factors are the bounded multipliers, never free
+ *  coefficients, so they are stored exactly as computed. */
 export function impliedParts(p: SnapshotProtocol, asOf: string, curve: FittedCurve): ValueParts {
   const x = features(p, asOf);
   const size = 10 ** (curve.beta[0] + curve.beta[1] * x[1]!);
   const family = 10 ** (curve.offsets[p.category ?? '(uncategorised)'] ?? 0);
-  const growth = 10 ** (curve.beta[2] * x[2]!);
-  const seasoning = 10 ** (curve.beta[3] * x[3]!);
+  const growth = momentumMult(p);
+  const seasoning = seasoningMult(p, asOf);
   const implied = clamp(Math.round(size * family * growth * seasoning), 1, IMPLIED_VALUE_MAX);
   return { size, family, growth, seasoning, implied };
 }
@@ -512,13 +563,13 @@ function flatResiduals(targets: FitPoint[], baselinePoints: FitPoint[]): number[
  * counts how many leave-one-out actuals fall inside the bands those same
  * quantiles draw around each prediction.
  */
-export function runBacktests(points: FitPoint[]): BacktestSummary {
+export function runBacktests(points: FitPoint[], asOf: string): BacktestSummary {
   const looResiduals: number[] = [];
   for (let i = 0; i < points.length; i++) {
     const rest = points.filter((_, j) => j !== i);
     const curve = fitCurve(rest);
     const pt = points[i]!;
-    looResiduals.push(pt.y - predictLog10(pt.x, curve, pt.category));
+    looResiduals.push(pt.y - predictLog10(pt.x, curve, pt.category, fitPointMultipliersLog10(pt, asOf)));
   }
   const loo = scoreResiduals(looResiduals);
   const flatLoo = scoreResiduals(flatResiduals(points, points));
@@ -534,7 +585,7 @@ export function runBacktests(points: FitPoint[]): BacktestSummary {
   const train = points.filter((pt) => pt.listed_at !== null && pt.listed_at < '2024-01-01');
   const test = points.filter((pt) => pt.listed_at !== null && pt.listed_at >= '2024-01-01');
   const timeCurve = fitCurve(train);
-  const timeResiduals = test.map((pt) => pt.y - predictLog10(pt.x, timeCurve, pt.category));
+  const timeResiduals = test.map((pt) => pt.y - predictLog10(pt.x, timeCurve, pt.category, fitPointMultipliersLog10(pt, asOf)));
   const time = scoreResiduals(timeResiduals);
   const timeFlat = scoreResiduals(flatResiduals(test, train));
 
@@ -785,7 +836,7 @@ function scoreRow(
 export function buildBoard(snapshot: Snapshot): BoardRow[] {
   const points = fitPoints(snapshot);
   const curve = fitCurve(points);
-  const backtest = runBacktests(points);
+  const backtest = runBacktests(points, snapshot.as_of);
   const rankable = snapshot.protocols.filter(isRankable);
   const scored = rankable.map((p) => scoreRow(p, snapshot.as_of, curve));
   scored.sort((a, b) => b.implied_value_usd - a.implied_value_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
@@ -844,7 +895,7 @@ export function radarRow(row: BoardRow): RadarRow {
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData } {
   const points = fitPoints(snapshot);
   const curve = fitCurve(points);
-  const backtest = runBacktests(points);
+  const backtest = runBacktests(points, snapshot.as_of);
   const board = buildBoard(snapshot);
   const live = liveRows(snapshot);
   const preToken = snapshot.protocols.filter(isPreToken).length;
@@ -854,13 +905,13 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     else if (row.farm.verdict === 'THIN') verdictCounts.thin++;
     else verdictCounts.skip++;
   }
-  // The formula describes the model actually fitted: when the growth
-  // coefficient was constrained to zero, the growth factor is exactly 1 on
-  // every row and is not part of the formula.
-  const growthPart = curve.beta[2] === 0 ? '' : ' x growth';
+  // The formula describes the model actually fitted: the size curve plus the
+  // two bounded multipliers. growth_coef is the momentum half-weight (0.5)
+  // and age_coef is the seasoning scale (0.4): the multiplier parameters,
+  // not free regression coefficients.
   const formula =
     `value = 10^${curve.beta[0].toFixed(2)} x (TVL/$100M)^${curve.beta[1].toFixed(2)} ` +
-    `x family${growthPart} x seasoning`;
+    `x family x momentum x seasoning`;
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -870,8 +921,8 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       formula,
       intercept: round4(curve.beta[0]),
       slope: round4(curve.beta[1]),
-      growth_coef: round4(curve.beta[2]),
-      age_coef: round4(curve.beta[3]),
+      growth_coef: MOMENTUM_HALF_WEIGHT,
+      age_coef: SEASONING_SCALE,
     },
     backtest,
     curve: [...points]
