@@ -260,3 +260,299 @@ likely won't flip it.
 - Optional docs (harmless, not part of the dossier): `MODEL_NOTES_R4.md`, `DIAGNOSIS_R15.md`, `IMPROVEMENT_STATUS_R15.md`
 - README.md already on GitHub from the rebuild — verify it is still there; do NOT re-upload if unchanged. GitHub About already set — verify, do not change. Return the NEW HEAD SHA.
 - Then Phase D (parent): submit with the HEAD SHA + transcripts-r15.tar.gz, title "Token Radar — radar-4: time-split-validated rebuild". Quota: 1 Token Radar submit used today (UTC Nov 16); cap ≥2, so today's submit should work — a 429 refusal does NOT burn quota, retry tomorrow after 07:00 WIB.
+
+## radar-5 — build complete (builder 5fb32994, Mon 2026-11-16 ~18:06–19:10 WIB)
+
+Model version `radar-5-fitted`. The pricing model is UNCHANGED from radar-4
+(same OLS size curve: intercept 7.2028, slope 0.5223, family + bounded
+momentum + seasoning) — radar-5 is a completeness pass, not a refit. It closes
+every gap the top 15 have and we didn't (REFERENCES_R15.md changes 1–7 + 10),
+and it tests 8–9 honestly. Local commit `3eade3a` (4 files: `lib/model.ts`,
+`dashboard/app.js`, `dashboard/app.css`, `dashboard/index.html`).
+
+### What changed
+1. **Break-even column (highest leverage)** — per row: break-even $ =
+   (fees + T-bill) × TVL / (0.10 × $1,000); break-even odds % = share of the
+   model's own 128 LOO residuals under which the true value reaches
+   break-even (empirical CDF, no invented probability); EV / $ gas = slice /
+   fees. Board cell shows BE $ + odds % + EV/gas; detail dialog has a
+   break-even row in the decomposition + a break-even paragraph.
+2. **Ablation backtest table** — flat → size curve only → curve+family →
+   full model, each with LOO median miss + within-3× + within-2×, and the
+   time-split row for each. Rendered in the pricing panel + stated in the
+   Method tab with the honest reading.
+3. **ROBUST verdict tier** — ROBUST = FARM row whose net at the P25 low end
+   is still ≥ $1. **52 rows.** Low-end net printed under the point net on
+   every row; ROBUST pill (distinct green) + filter option + deep link
+   `?verdict=ROBUST`. Verdict definitions unchanged (FARM net ≥ $1, THIN
+   −$10 ≤ net < $1, SKIP net < −$10).
+4. **Hero line + FARM NEXT** — hero: total implied + best net per hands-on
+   hour (top 3). FARM NEXT list: top 4 by net/hour with verb + chain.
+5. **× TVL column** — implied / TVL as a sub-line in the Implied cell
+   (and in the detail stat card).
+6. **P25–P75 as the displayed band** — range bar + label on every row;
+   P10–P90 stays in the data and in the detail dialog; both coverages in
+   the backtest table (50% band 50.8%, 80% band 81.2%).
+7. **Total implied headline + histogram** — hero total **$1.98B**; log-bin
+   histogram (8 bins, {lo:6, hi:8, counts:[2,25,57,58,28,21,3,4]}, sums
+   to 198) rendered under the scatter.
+10. **Mechanism-aware farm column** — per-row verb from a DOCUMENTED
+    per-category map (Lend, Trade, Bridge, Stake, Vault, Mint, Insure,
+    Subscribe, default Deposit) + chain + fees + **45 min setup** (the
+    plan's two setup steps, 15 + 30 min, documented as a plan constant).
+    Farm plan header now reads "Farm plan · Vault on Base · $1.0K for 45
+    days · 45 min setup".
+
+### Backtests — old (radar-4) vs new (radar-5): model identical, numbers identical
+- LOO: **×3.60 / 45.3125% within 3× / 31.25% within 2×** (flat ×4.88 /
+  35.1563% / 29.6875%). Time split: **×2.99 / 50.9804% / 29.4118%**
+  (flat ×5.20 / 35.2941% / 25.4902%). Band coverage 50.7813% / 81.25%.
+  q10 −1.0733, q90 +1.0289, q25 −0.471, q75 +0.6706.
+- Ablation (same splits, refit per fold): flat LOO ×4.88/35.2%, TIME
+  ×5.20/35.3%; curve-only LOO **×3.40**/42.2%, TIME **×2.91**/51.0%;
+  curve+family LOO ×3.70/44.5%, TIME ×3.01/49.0%; full LOO ×3.60/45.3%,
+  TIME ×2.99/51.0%. Within-2×: flat 29.7%/25.5%, curve 32.0%/37.3%,
+  family 32.8%/35.3%, full 31.3%/29.4%. Honest reading: the curve alone
+  does most of the work and has the best medians; family adds LOO coverage
+  but costs time coverage; the multipliers restore it and add the last
+  LOO coverage.
+- NOTE: LOO median is 0.5557 log10 here vs 0.5564 in MODEL_NOTES_R4.md —
+  4th-decimal difference, both display ×3.60; within-3×, time split,
+  q10/q90 all match exactly.
+- CORRECTION to REFERENCES_R15.md: Steakhouse break-even is **$245.9M**,
+  not the $152M estimated there — Base gas is $0.80/tx (fees $4.00), not
+  $0.60. Top rows: Steakhouse $85.4M, BE $245.9M, odds 30.47%, EV/gas
+  0.8×, low-end −$7.88, ROBUST false, Vault, 0.031× TVL; Sentora $84.6M,
+  BE $1,790.5M, odds 6.25%, EV/gas 0.1×, low-end −$63.89; Gauntlet
+  $66.4M, BE $140.9M, odds 35.94%, EV/gas 1.1×.
+
+### Fit tests 8–9 — both tested, NEITHER shipped
+8. **Sibling factor — NOT TESTABLE, factor stays 1.0.** The snapshot
+   carries NO parentProtocol field (RULES.txt confirms it is not one of
+   the ten fields); traded tokens sharing first TWO name words: 0 groups;
+   slug-prefix pairs among traded: 0; only one first-word group ("Yield
+   Basis" | "Yield Yak Aggregator" — a generic word, not siblings). The
+   sibling dummy is all-zero on the 128 comps — no fit test is possible.
+   The page states this honestly (r13's honest-null pattern).
+9. **Joint ridge — BEATS radar-4 on both blind tests, NOT SHIPPED.**
+   Ridge on log(mcap/TVL), 71 features (intercept + size z + 34 category
+   one-hots + 33 chain one-hots + growth + age), λ chosen by inner
+   leave-one-out via the hat-matrix formula, nested CV (no selection
+   leakage). λ=3: **LOO ×3.22 / 50.0% within 3×; TIME ×2.89 / 52.9%** —
+   beats radar-4 (×3.60/45.3%, ×2.99/51.0%) on BOTH. But the board sanity
+   check kills it: Spearman ridge vs radar-4 = 0.689; biggest rank moves
+   ±99–124 places; Drakewell ($28M TVL) lands #4 worth $62.5M (2.2×
+   TVL); Sentora $164.4M — above every top-15 entry's top value
+   ($31M–$126M); total implied $2.53B vs radar-4 $1.98B; verdicts FARM
+   118 / THIN 42 / SKIP 38. A blind-test win that does not survive
+   contact with the board. The OLS curve stays the pricing model; the
+   ridge numbers are reported honestly in the Method tab. Harness:
+   `tr-model-test/variants.ts`, `tr-model-test/ridge-board.ts`.
+
+### Verification (all green)
+- **main.ts re-run into `out/`**: 758 protocols, 40 watchlist, 198 rows,
+  `boardIssue()` null. Verdicts FARM 122 / THIN 19 / SKIP 57, **ROBUST
+  52**. Total implied $1.98B. Factor reconciliation max deviation $0;
+  every P10 ≤ implied ≤ P90; every P25 ≤ implied ≤ P75; verdicts follow
+  nets; all 40 watchlist present.
+- **Real-data dashboard boot test** (`tr-model-test/boot-real.js`,
+  stubbed DOM, real `out/data.js` + `dashboard/app.js`): **43/43
+  passed** — hero line ($1.98B + best per hour), ROBUST chip 52 / FARM
+  non-robust 70, backtest table 6 rows incl. within-2×, ablation 4
+  variants, histogram 8 bars, FARM NEXT 4 items, 198 board rows with
+  × TVL / P25–P75 / low-end / break-even / verb+45-min cells, ROBUST
+  pill renders, `tierOf` + `applyFilters` (ROBUST filter → 52 rows),
+  detail dialog (Steakhouse click: P25–P75 + × TVL, break-even/odds/EV,
+  decomposition break-even row, "Farm plan · Vault" + 45 min setup),
+  deep link `?verdict=ROBUST` → 52 rows.
+- **Data checks** (`tr-model-test/verify-data.js`): **13/13 passed** —
+  watchlist 40 all on board, histogram sums to 198, ablation numbers,
+  total implied, verdict_counts {farm:122, thin:19, skip:57, robust:52},
+  128 LOO residuals, q25/q75.
+- **Dashboard size budget**: raw 65,154 B; dossier text **65,423 B**
+  (cap 65,536 — 113 B margin, all 3 files whole, NO cut line). The
+  dossier was 65,783 B before trimming (9 lines of index.html cut);
+  trimmed ~630 B of Method-tab + app.js prose to fit. Do NOT add
+  dashboard text without re-checking this budget.
+- **Kit check: 12 passed, 0 failed, 6 skipped** (`--worktree`,
+  transcripts-radar5.tar.gz). thinking_reproduces 58.5% (1313/2241),
+  thinking_priced 8 usage records, thinking_revised dashboard/app.js
+  from 22 messages.
+- **Bundle: `transcripts-radar5.tar.gz`, 1,329,971 B, sha256
+  `1b184e0c54e59fd69e91379ee1cd2b3e10e624bfbb6e705da49cb3b8615167ea`
+  — CLEAN, 0 password occurrences** (verified with
+  `check_password.py`). 6 sessions: the 4 rebuild sessions (38406c9d,
+  70921881, a3628d81, cd7484fe) + coordinator 7343a1e2 + radar-5 builder
+  5fb32994. Usage: `muse-usage-radar5.jsonl` (8 records; the builder's
+  own session has 0 usage rows — written only when the run completes).
+  ⚠️ **Contamination incident + fix:** the first bundle (sha256
+  `474ceccd…`) FAILED the password check — 4 occurrences (1 physical
+  occurrence per file in 7343a1e2 + 5fb32994, from the "Login ke github
+  saya" excerpt carried in the forked/compaction context; the tool's
+  auto-redaction missed them). Fixed with
+  `tr-model-test/redact_bundle.py` (programmatic candidate derivation,
+  replace with `[REDACTED:credential]`, JSON validity re-checked per
+  line) + `tr-model-test/fix_manifest.py` (manifest bytes + sha256
+  updated for both redacted files — the kit check rejects a stale
+  manifest). The contaminated file was OVERWRITTEN in place; no
+  contaminated copy remains in the work dir. The session files on disk
+  still contain the excerpt — they are never submitted; only the bundle
+  is. **Never include contaminated sessions a3d58228, d364e740,
+  2195ac74, 8c7d0e23.**
+- **Screenshots: NOT updated.** `repo/screenshots/` still holds the
+  radar-4 shots (modified vs local HEAD, uncommitted) — they do NOT
+  show the radar-5 columns. They must be re-taken in Phase B.
+
+### Phase A — parent (browser): update the preview repo
+Upload to the preview repo (same files as radar-4, regenerated).
+**The local `preview/` directory is ALREADY regenerated from the radar-5
+files** (data.js + dashboard/index.html/app.js/app.css identical to
+`out/`/`repo/`; detail.html/filtered.html/filtered-table.html rebuilt
+from the new index.html, replaceState before the data.js script in all
+three, hide-style in filtered-table.html) — upload those files as-is:
+- `preview/data.js` (NEW — radar-5 data: breakeven/odds/EV/robust/p25/p75/histogram/ablation)
+- `preview/dashboard/index.html`, `preview/dashboard/app.js`,
+  `preview/dashboard/app.css` (NEW — radar-5 dashboard)
+- `preview/dashboard/detail.html`, `preview/dashboard/filtered.html`,
+  `preview/dashboard/filtered-table.html` — variants must be
+  REGENERATED from the new index.html (copy it, then re-apply the
+  variant tweak). **detail.html: the replaceState script must stay
+  BEFORE the data.js/app.js script tags** (script order is critical —
+  the dialog only opens if replaceState runs before boot()).
+- Lesson from radar-4: thum.io caches by URL — for changed data prefer
+  microlink (fresh render).
+
+### Phase B — coordinator (after Phase A): 3 NEW screenshots (1440×900, PNG, ≤512 KiB)
+- `1-board.png` — board, must show the Break-even column, ROBUST pills,
+  P25–P75 range bars, × TVL sub-lines, hero line ($1.98B), FARM NEXT.
+- `2-detail.png` — `?detail=steakhouse-financial`, must show the
+  break-even paragraph + decomposition break-even row + "Farm plan ·
+  Vault" header.
+- `3-filtered.png` — filtered table variant (same as radar-4).
+- Then re-run main.ts into `out/` (rebuilds dossier.json with the new
+  screenshots) and re-run the kit check before Phase C.
+
+### Phase C — parent (browser): upload the entry repo
+https://github.com/people871/makefun-token-radar-01 — upload `lib/model.ts`,
+`dashboard/app.css`, `dashboard/app.js`, `dashboard/index.html`,
+`screenshots/1-board.png`, `screenshots/2-detail.png`,
+`screenshots/3-filtered.png` (NEW radar-5 shots), `main.ts` only if it
+differs from the GitHub copy. README.md + GitHub About already set —
+verify, do not change. Return the NEW HEAD SHA. Local commit for
+reference: `3eade3a`.
+
+### Phase D — parent: submit
+Submit with the NEW HEAD SHA + transcripts-radar5.tar.gz, title
+"Token Radar — radar-5: break-even, ROBUST, ablation". **Likely Tue
+2026-11-17 after 07:00 WIB** (UTC day rollover — 2 Token Radar submits
+already used today, UTC Nov 16; cap ≥2 confirmed). A 429 refusal does
+NOT burn quota.
+
+### Honest rank expectation (unchanged from radar-4)
+Radar-5 closes every completeness gap the top 15 have. What remains is
+match count: we are 12-0 provisional; the top 15 are all 20-0. A
+significant rise (plausibly into the hundreds) is realistic once the new
+entry accumulates matches; rank 15 is possible but not probable — the
+gap to einsteincy is +58,282 judge points and the top 15's dossiers are
+also complete. Do not promise rank 15.
+
+## Phase B complete (radar-5) — screenshot finisher, Mon 2026-11-16 ~19:15 WIB
+
+All 3 screenshots are NEW radar-5, verified by eye. The radar-4 files are gone.
+
+### Screenshots (repo/screenshots/, 1440×900 PNG, ≤512 KiB each)
+- `1-board.png` — **476,568 B**, sha256 `656c66e5…`. Microlink of the
+  dashboard URL (`/dashboard/`, fresh — radar-4's board was the root URL,
+  so no cache hit). Shows: eyebrow "TOKEN RADAR · MODEL RADAR-5-FITTED",
+  hero "All 198 protocols, priced: **$1.98B** implied in total. Best net
+  per hands-on hour: BounceBit Prime +$27.08/h · Manifest Trade +$25.25/h
+  · MetalX Swap +$21.82/h", chips "198 ranked", "24 traded", "144 set
+  aside", "**52 ROBUST** — pay at the low end", "70 FARM", "19 THIN",
+  pricing panel (formula `10^7.20 × (TVL/$100M)^0.52 × family × momentum
+  × seasoning`, INTERCEPT 7.203, SLOPE 0.522), blind backtest table (LOO
+  45.3% vs flat 35.2%, time split 51.0% vs 35.3%, inside blind 50%/80%
+  band 50.8%/81.3%, median ×3.60 vs ×4.88), ablation table at the bottom,
+  scatter + "Distribution of implied values" histogram (bars 2, 25, 57,
+  58, 28, 21, 3, 4).
+- `2-detail.png` — **331,151 B**, sha256 `632b16ae…`. Microlink of
+  `dashboard/detail.html` **with cache-buster `?v=r5-20261116`** (see the
+  lesson below). Steakhouse dialog OPEN: "Rank 1 of 198 · Pre-token",
+  IMPLIED VALUE **$85.4M**, "P25 to P75 $28.9M – $400.1M · 0.031× TVL",
+  TVL $2.75B, NO TOKEN FOR 1.5 yr, $1.0K SLICE $3, NET OF ALL COSTS THIN
+  -$5.83 ("-$2.33 per hour · low end -$7.88"). Break-even paragraph:
+  "Break-even launch value **$245.9M** — the farm pays only if the launch
+  is worth at least that. Break-even odds **30%** … EV per $ of gas
+  **0.8×**." Decomposition has P25 to P75 row ($28.9M – $400.1M), P10 to
+  P90 row ($7.2M – $913.0M) and **Break-even row** ("launch value at which
+  the $1.0K farm nets $0 · 30% odds · EV 0.8× per $ gas — $245.9M").
+  Background shows "MODEL radar-5-fitted". (Odds display rounds 30.47%
+  to 30% — display rounding, not a data difference.)
+- `3-filtered.png` — **252,504 B**, sha256 `f099e85d…`. Microlink of
+  `dashboard/filtered-table.html` **with cache-buster `?v=r5-20261116`**.
+  Category Dexs, "21 of 198 rows shown". Columns now include
+  **BREAK-EVEN** ($55.9M / 33% odds · EV 1.2×/gas; $5.9M / 67% odds ·
+  EV 4.3×/gas; …); implied cell shows **× TVL** sub-line (0.061× / 0.213×
+  / 0.272× / 0.299× TVL) + **P25–P75** band; NET OF ALL COSTS shows low-end
+  net ("low end -$12.79" / "-$4.39" / "-$0.72" / "+$1.82"); FARM column
+  shows mechanism verb + chain ("Trade · Bitt…"); **ROBUST pill** visible
+  (XRPL DEX "ROBUST +$21.60 pays even at the low end", another ROBUST
+  +$33.80 at the bottom). Rows: Bittensor dTAO #15 $23.1M, Nado Spot #50
+  $10.9M, Project X #60 $9.4M, XRPL DEX #70 $8.3M.
+  - Known limitation: the table is now wider than 1440 px (the BREAK-EVEN
+    column adds width), so the FARM column is cut at the right edge — the
+    verb ("Trade") is visible, the chain is truncated. All radar-5 columns
+    are fully visible; not worth another attempt.
+
+### LESSON — microlink caches by URL too (radar-4 lesson extended)
+The FIRST takes of 2-detail.png (272,522 B) and 3-filtered.png
+(242,587 B) were STALE radar-4 renders: background "radar-4-fitted",
+dialog with P10–P90 only and no break-even, filtered table with no
+BREAK-EVEN column, no ROBUST, "$5.00 fees · 90d hold · 2.5h work" farm
+text, Bittensor dTAO $34.1M at rank 7. Microlink had cached the radar-4
+screenshots of those exact URLs (radar-4's 2-detail was also microlink).
+The live data.js was verified byte-identical to local (sha256
+`6a332f26…`, radar-5 fields: breakeven 396, odds 198, robust 199, p25/p75
+198 each, histogram 1, ablation 1) — the staleness was screenshot-cache
+only, not the live page. **Fix: cache-buster query param on the target
+URL (`?v=r5-20261116`)** — the pages' inline replaceState overwrites the
+query before boot, so the render is identical, just fresh. 1-board.png
+needed no buster (new `/dashboard/` URL). thum.io was NOT used (it also
+caches by URL and rejects query-string targets). Rule for future
+re-takes: ALWAYS add a fresh `?v=<version>` to any URL that was
+screenshotted before.
+- Side finding: the preview repo ROOT index.html (420 KB, served at
+  `https://people871.github.io/token-radar-preview/`) is a STALE inlined
+  board with NO "radar-N-fitted" string, no break-even, no ROBUST — a
+  leftover from an earlier upload. The live board is at `/dashboard/`
+  (15,199 B, matches local, radar-5 markers present). Do NOT screenshot
+  the root URL. (The parent may want the stale root index removed or
+  replaced in a later cleanup — it does not affect the entry repo.)
+
+### Verification (all green)
+- **main.ts re-run into `out/`**: 758 protocols, 40 watchlist, 198 rows
+  scored, `boardIssue()` null (per the run output; board 198 rows).
+  `out/screenshots/` sha256 MATCH `repo/screenshots/` for all 3 files.
+  Dossier regenerated: `out/dossier.json` 1,481,234 B, `out/data.js`
+  472,439 B.
+- **Kit check: 12 passed, 0 failed, 6 skipped, 5 checked at submission**
+  (`--worktree`, transcripts-radar5.tar.gz) — identical to the builder's
+  verification. thinking_reproduces 58.5% (1313/2241), thinking_priced 8
+  usage records.
+- **Bundle NOT re-bundled**: transcripts-radar5.tar.gz sha256 unchanged
+  (`1b184e0c…`), password check CLEAN (0 occurrences). Only the 3 binary
+  screenshots changed (`git status`: `M screenshots/1-board.png`,
+  `M screenshots/2-detail.png`, `M screenshots/3-filtered.png` vs local
+  HEAD `3eade3a`); no source file the bundle covers changed.
+
+### FINAL Phase C upload list (parent — browser)
+Upload to https://github.com/people871/makefun-token-radar-01:
+`lib/model.ts`, `dashboard/app.css`, `dashboard/app.js`,
+`dashboard/index.html`, `screenshots/1-board.png`, `screenshots/2-detail.png`
+(331,151 B, sha256 `632b16ae…`), `screenshots/3-filtered.png`,
+`main.ts` ONLY if it differs from the GitHub copy — **verified IDENTICAL,
+skip it** — plus optional docs `REFERENCES_R15.md`,
+`IMPROVEMENT_STATUS_R15.md` (no MODEL_NOTES_R5.md exists). README.md +
+GitHub About already set — verify, do not change. Return the NEW HEAD
+SHA. Then Phase D: submit with the NEW HEAD SHA +
+transcripts-radar5.tar.gz, title "Token Radar — radar-5: break-even,
+ROBUST, ablation" (likely Tue 2026-11-17 after 07:00 WIB, UTC rollover).
