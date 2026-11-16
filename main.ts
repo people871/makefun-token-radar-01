@@ -1,15 +1,17 @@
 // Token radar entrypoint (Node 22, standard library only).
 //
-// Reads the sealed snapshot, scores every pre-token protocol with the model in
-// lib/model.ts, and writes the ranked board, the dashboard's data, the page and
-// the screenshots to the output directory, then the dossier the judge reads.
+// Reads the sealed snapshot, scores every rankable pre-token protocol with
+// the fitted model in lib/model.ts, and writes the ranked board, the
+// dashboard's data, the page and the screenshots to the output directory,
+// then the dossier the judge reads.
 //
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
 //
 // --input takes a snapshot.json file or the directory holding it (default
-// /input); --output or MAKEFUN_OUTPUT_DIR takes the output directory (default
-// /output). The run is deterministic: the same snapshot bytes give the same
-// output bytes, with no clock, no randomness and no network anywhere.
+// /input); --output or MAKEFUN_OUTPUT_DIR takes the output directory
+// (default /output). The run is deterministic: the same snapshot bytes give
+// the same output bytes, with no clock, no randomness and no network
+// anywhere.
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -109,6 +111,6 @@ writeFileSync(
 );
 
 process.stdout.write(
-  `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
+  `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.set_aside_size} set aside, ${radar.live_size} live set aside)\n` +
     `token radar: wrote ${join(outDir, 'board.json')}, ${join(outDir, 'data.js')}, ${join(outDir, 'dashboard')} (${dashboardFiles.length} files), ${join(outDir, 'screenshots')} (${shots.length} images) and ${join(outDir, 'dossier.json')}\n`,
 );
